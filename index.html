@@ -1,0 +1,391 @@
+
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>냉장고 재고 · 레시피 (PWA + Firebase optional)</title>
+  <meta name="description" content="냉장고 재고 관리 + 재료 기반 구글 레시피 검색 링크 생성. GitHub Pages에 올려 사용 가능. Firebase 동기화는 optional." />
+  <link rel="manifest" href="manifest.json">
+  <style>
+    :root{--bg:#f7fafc;--card:#fff;--muted:#6b7280;--accent:#0ea5a4}
+    *{box-sizing:border-box}
+    body{margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,'Noto Sans KR',sans-serif;background:var(--bg);color:#111}
+    .container{max-width:980px;margin:18px auto;padding:16px}
+    header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+    h1{font-size:20px;margin:0}
+    .grid{display:grid;gap:12px}
+    .cols-3{grid-template-columns:2fr 1fr}
+    .card{background:var(--card);padding:12px;border-radius:10px;box-shadow:0 1px 4px rgba(2,6,23,0.06)}
+    button{cursor:pointer}
+    .master-list{max-height:220px;overflow:auto}
+    .row{display:flex;align-items:center;justify-content:space-between;padding:8px;border-radius:8px}
+    .row + .row{margin-top:6px}
+    .small{font-size:12px;color:var(--muted)}
+    .pill{padding:6px 8px;border-radius:999px;background:#eef2f7;font-size:12px}
+    .locations{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+    .loc{min-height:160px;padding:8px;border-radius:8px;border:1px dashed #e6edf0;background:#fbfdfe}
+    .batch{display:flex;justify-content:space-between;align-items:center;padding:8px;border-radius:8px;border:1px solid #eef2f5;background:#fff}
+    .batch.expired{background:#fff4f4;border-color:#f2c6c6}
+    .batch.soon{background:#fffaf0;border-color:#f5e2a8}
+    .modal{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.35)}
+    .dialog{width:320px;background:var(--card);padding:14px;border-radius:10px}
+    @media(max-width:800px){.cols-3{grid-template-columns:1fr}.locations{grid-template-columns:1fr}}
+    footer{margin-top:12px;font-size:12px;color:var(--muted)}
+    .status{font-size:12px;color:#0b7285;margin-top:6px}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>냉장고 재고 · 레시피 (PWA)</h1>
+      <div class="small">구글 레시피 검색 · Firebase 동기화 선택 가능</div>
+    </header>
+
+    <main class="grid cols-3">
+      <section class="card">
+        <h2 style="margin:0 0 8px 0">대시보드</h2>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+          <button id="filter-all">전체</button>
+          <button class="filter-loc">냉장</button>
+          <button class="filter-loc">냉동</button>
+          <button class="filter-loc">실온</button>
+        </div>
+
+        <div style="display:flex;gap:8px;margin-bottom:10px">
+          <div style="flex:1" class="card small"><div>재고 총합</div><div id="total-count" style="font-weight:600">0</div></div>
+          <div style="flex:1" class="card small"><div>임박(≤3일)</div><div id="soon-count" style="font-weight:600">0</div></div>
+          <div style="flex:1" class="card small"><div>만료됨</div><div id="expired-count" style="font-weight:600">0</div></div>
+        </div>
+
+        <div>
+          <h3 style="margin:6px 0">추천 레시피 (간단)</h3>
+          <ul id="simple-recipes" style="padding-left:16px;margin:0" class="small"></ul>
+        </div>
+
+        <div style="margin-top:10px">
+          <h3 style="margin:6px 0">레시피 검색(구글)</h3>
+          <div class="small">체크한 재료로 구글 검색 결과를 새 탭으로 엽니다.</div>
+          <div id="search-ingredients" style="margin-top:8px" class="small"></div>
+          <div style="margin-top:8px;display:flex;gap:8px">
+            <button id="search-google" style="padding:8px 12px;background:var(--accent);color:#fff;border-radius:6px">구글에서 레시피 찾기</button>
+            <button id="open-multi" style="padding:8px 12px;border-radius:6px">여러 검색 열기</button>
+          </div>
+        </div>
+
+        <div class="status" id="sync-status">동기화: 로컬 저장소 사용 중</div>
+      </section>
+
+      <aside class="card">
+        <h3 style="margin:0 0 8px 0">마스터 재료</h3>
+        <div style="display:flex;gap:6px;margin-bottom:8px">
+          <input id="new-name" placeholder="재료 이름 (예: 닭고기)" style="flex:1;padding:8px;border:1px solid #e6eef1;border-radius:8px" />
+          <select id="new-cat" style="padding:8px;border-radius:8px">
+            <option>기타</option>
+            <option>고기</option>
+            <option>야채</option>
+            <option>냉동</option>
+            <option>냉장</option>
+            <option>달걀/유제품</option>
+          </select>
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:8px">
+          <button id="add-master" style="padding:8px;border-radius:8px">마스터에 추가</button>
+          <button id="seed-sample" style="padding:8px;border-radius:8px">샘플 데이터 추가</button>
+        </div>
+        <div class="master-list" id="master-list"></div>
+      </aside>
+
+    </main>
+
+    <section class="card" style="margin-top:12px">
+      <h3 style="margin:0 0 8px 0">인벤토리 (드래그로 위치 이동 / 더블클릭으로 빠르게 수정)</h3>
+      <div class="locations" id="locations">
+        <div class="loc" data-loc="냉장">
+          <div style="font-weight:600;margin-bottom:6px">냉장</div>
+          <div class="batches" data-loc="냉장"></div>
+        </div>
+        <div class="loc" data-loc="냉동">
+          <div style="font-weight:600;margin-bottom:6px">냉동</div>
+          <div class="batches" data-loc="냉동"></div>
+        </div>
+        <div class="loc" data-loc="실온">
+          <div style="font-weight:600;margin-bottom:6px">실온</div>
+          <div class="batches" data-loc="실온"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" style="margin-top:12px">
+      <h3 style="margin:0 0 8px 0">직접 추가</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <select id="select-ing" style="padding:8px;border-radius:8px"></select>
+        <input id="add-qty" type="number" value="1" min="1" style="width:80px;padding:8px;border-radius:8px" />
+        <select id="add-loc" style="padding:8px;border-radius:8px">
+          <option>냉장</option>
+          <option>냉동</option>
+          <option>실온</option>
+        </select>
+        <button id="add-batch" style="padding:8px;border-radius:8px">추가하기</button>
+      </div>
+    </section>
+
+    <footer>
+      <div class="small">데이터는 브라우저 로컬스토리지에 저장됩니다. (기기별로 저장됨). Firebase 동기화 활성화시 자동으로 클라우드에 저장됩니다.</div>
+    </footer>
+  </div>
+
+  <div id="modal-root" style="display:none"></div>
+
+  <!-- Optional firebase-config.js can be placed in the repo root to enable cloud sync.
+       Contents example (do NOT commit real credentials publicly unless you know what you're doing):
+       <script>
+         window.FIREBASE_CONFIG = {
+           apiKey: "YOUR_API_KEY",
+           authDomain: "your-app.firebaseapp.com",
+           projectId: "your-app-id",
+           storageBucket: "your-app.appspot.com",
+           messagingSenderId: "...",
+           appId: "..."
+         };
+         window.FR_USER_ID = "your-unique-userid"; // optional, default: 'public-user'
+       </script>
+  -->
+
+  <!-- Firebase SDK (only loaded if FIREBASE_CONFIG is present) -->
+  <script>
+  // App logic: localStorage + optional Firestore sync (no auth; uses a single user collection id)
+  (function(){
+    const LS_MASTER='fr_master_v1';
+    const LS_INV='fr_inventory_v1';
+    const DEFAULTS = [
+      {id:'ing-egg',name:'계란',category:'달걀/유제품',shelf:21},
+      {id:'ing-chicken',name:'닭고기',category:'고기',shelf:3},
+      {id:'ing-lettuce',name:'상추',category:'야채',shelf:5},
+      {id:'ing-fish',name:'생선',category:'고기',shelf:2},
+      {id:'ing-frozen-veg',name:'냉동야채',category:'냉동',shelf:365},
+      {id:'ing-milk',name:'우유',category:'달걀/유제품',shelf:7},
+    ];
+
+    // state
+    let master = loadJSON(LS_MASTER) || DEFAULTS.slice();
+    let inventory = loadJSON(LS_INV) || [];
+    let filterLoc = '모두';
+    let firebaseEnabled = false;
+    let firestore = null;
+    let userId = 'public-user';
+
+    // dom
+    const masterList = document.getElementById('master-list');
+    const selectIng = document.getElementById('select-ing');
+    const addBatchBtn = document.getElementById('add-batch');
+    const addQty = document.getElementById('add-qty');
+    const addLoc = document.getElementById('add-loc');
+    const newName = document.getElementById('new-name');
+    const newCat = document.getElementById('new-cat');
+    const addMasterBtn = document.getElementById('add-master');
+    const seedBtn = document.getElementById('seed-sample');
+    const totalCount = document.getElementById('total-count');
+    const soonCount = document.getElementById('soon-count');
+    const expiredCount = document.getElementById('expired-count');
+    const searchIngredients = document.getElementById('search-ingredients');
+    const searchGoogleBtn = document.getElementById('search-google');
+    const openMultiBtn = document.getElementById('open-multi');
+    const simpleRecipes = document.getElementById('simple-recipes');
+    const syncStatus = document.getElementById('sync-status');
+
+    renderMaster(); renderSelect(); renderInventory(); updateStats(); renderSearchBox(); renderSimpleRecipes();
+
+    // wire UI
+    addMasterBtn.addEventListener('click',()=>{
+      const name=newName.value.trim(); if(!name) return alert('이름 입력');
+      const cat=newCat.value; const id='ing-'+Math.random().toString(36).slice(2,9);
+      master.unshift({id,name,category:cat,shelf:7}); saveJSON(LS_MASTER,master); newName.value=''; renderMaster(); renderSelect(); maybePushToCloud();
+    });
+    seedBtn.addEventListener('click',()=>{ master = DEFAULTS.slice(); saveJSON(LS_MASTER,master); inventory = []; saveJSON(LS_INV,inventory); renderMaster(); renderSelect(); renderInventory(); updateStats(); renderSimpleRecipes(); maybePushToCloud(); });
+
+    addBatchBtn.addEventListener('click',()=>{
+      const ingId = selectIng.value; if(!ingId) return alert('재료 선택');
+      const qty = Math.max(1, parseInt(addQty.value||1));
+      const loc = addLoc.value;
+      const id='b-'+Math.random().toString(36).slice(2,9);
+      const added=new Date().toISOString();
+      inventory.unshift({id,ingId,count:qty,added,loc}); saveJSON(LS_INV,inventory); renderInventory(); updateStats(); renderSimpleRecipes(); maybePushToCloud();
+    });
+
+    document.querySelectorAll('.filter-loc').forEach(b=>b.addEventListener('click',()=>{ filterLoc=b.innerText; renderInventory(); }));
+    document.getElementById('filter-all').addEventListener('click',()=>{ filterLoc='모두'; renderInventory(); });
+
+    searchGoogleBtn.addEventListener('click',()=>{
+      const checked = Array.from(searchIngredients.querySelectorAll('input[type=checkbox]:checked')).map(i=>i.parentElement.querySelector('span').innerText);
+      if(checked.length===0) return alert('검색할 재료를 선택하세요');
+      const q = encodeURIComponent(checked.join(' ')+' 요리 레시피');
+      const url = 'https://www.google.com/search?q='+q;
+      window.open(url,'_blank');
+    });
+
+    openMultiBtn.addEventListener('click',()=>{
+      const checked = Array.from(searchIngredients.querySelectorAll('input[type=checkbox]:checked')).map(i=>i.parentElement.querySelector('span').innerText);
+      if(checked.length===0) return alert('검색할 재료를 선택하세요');
+      const q=encodeURIComponent(checked.join(' ')+' 레시피');
+      const urls=[
+        'https://www.google.com/search?q='+q,
+        'https://www.bing.com/search?q='+q,
+      ];
+      urls.forEach(u=>window.open(u,'_blank'));
+    });
+
+    // simple recipe matcher
+    function renderSimpleRecipes(){
+      simpleRecipes.innerHTML=''; const have = new Set(inventory.filter(b=>b.count>0).map(b=>b.ingId));
+      const recipes = [
+        {title:'계란 오믈렛',ings:['ing-egg','ing-milk']},
+        {title:'구운 닭고기',ings:['ing-chicken']},
+        {title:'생선 샐러드',ings:['ing-fish','ing-lettuce']}
+      ];
+      recipes.forEach(r=>{ const ok = r.ings.every(i=>have.has(i)); const li=document.createElement('li'); li.textContent=r.title + (ok? ' — 가능':' — 재료 부족'); simpleRecipes.appendChild(li); });
+    }
+
+    // inventory render and events
+    function renderInventory(){
+      document.querySelectorAll('.batches').forEach(c=>c.innerHTML='');
+      inventory.forEach(b=>{
+        if(filterLoc!=='모두' && filterLoc!==b.loc) return;
+        const m = master.find(x=>x.id===b.ingId) || {name:'알 수 없음',category:'기타',shelf:7};
+        const expiry = addDaysISO(b.added,m.shelf);
+        const daysLeft = daysBetweenISO(new Date().toISOString(),expiry);
+        const div=document.createElement('div'); div.className='batch';
+        if(new Date(expiry) < new Date()) div.classList.add('expired');
+        else if(daysLeft<=3) div.classList.add('soon');
+        div.draggable=true; div.dataset.id=b.id;
+        div.innerHTML=`<div style="flex:1"><div style="font-weight:600">${m.name} <span style="font-size:12px;color:#64748b">x${b.count}</span></div><div class="small">추가: ${new Date(b.added).toLocaleDateString()} · 만료: ${new Date(expiry).toLocaleDateString()} (${daysLeft}일)</div></div><div style="display:flex;gap:6px;margin-left:8px"><button class="btn-dec">−</button><button class="btn-inc">+</button><button class="btn-del small">삭제</button></div>`;
+        div.addEventListener('dragstart',e=>{ e.dataTransfer.setData('text/plain',b.id); });
+        div.addEventListener('dblclick',()=>{ openQuickModal(b.id); });
+        div.querySelector('.btn-dec').addEventListener('click',()=>{ changeCount(b.id,-1); });
+        div.querySelector('.btn-inc').addEventListener('click',()=>{ changeCount(b.id,1); });
+        div.querySelector('.btn-del').addEventListener('click',()=>{ if(confirm('삭제하시겠습니까?')){ inventory=inventory.filter(x=>x.id!==b.id); saveJSON(LS_INV,inventory); renderInventory(); updateStats(); renderSimpleRecipes(); maybePushToCloud(); } });
+        const container = document.querySelector('.batches[data-loc="'+b.loc+'"]');
+        if(container) container.appendChild(div);
+      });
+
+      document.querySelectorAll('.loc').forEach(locEl=>{
+        locEl.addEventListener('dragover',e=>e.preventDefault());
+        locEl.addEventListener('drop',e=>{
+          e.preventDefault(); const id = e.dataTransfer.getData('text/plain');
+          const loc = locEl.dataset.loc; inventory = inventory.map(x=> x.id===id? {...x,loc}:x); saveJSON(LS_INV,inventory); renderInventory(); updateStats(); maybePushToCloud();
+        });
+      });
+    }
+
+    function openQuickModal(batchId){
+      const batch = inventory.find(b=>b.id===batchId); if(!batch) return;
+      const mr = master.find(m=>m.id===batch.ingId) || {};
+      const modal = document.createElement('div'); modal.className='modal';
+      modal.innerHTML = `<div class='dialog'><h3 style="margin:0 0 8px 0">${mr.name||'재료'} — 수량 수정</h3><div style="display:flex;gap:6px"><button id='qm-dec'>−1</button><button id='qm-inc'>+1</button><button id='qm-close'>닫기</button></div></div>`;
+      document.body.appendChild(modal);
+      modal.querySelector('#qm-dec').addEventListener('click',()=>{ changeCount(batchId,-1); });
+      modal.querySelector('#qm-inc').addEventListener('click',()=>{ changeCount(batchId,1); });
+      modal.querySelector('#qm-close').addEventListener('click',()=>{ modal.remove(); });
+    }
+
+    function changeCount(batchId,delta){ inventory = inventory.map(b=> b.id===batchId? {...b,count:Math.max(0,b.count+delta)}:b).filter(b=>b.count>0); saveJSON(LS_INV,inventory); renderInventory(); updateStats(); renderSimpleRecipes(); maybePushToCloud(); }
+
+    function renderMaster(){ masterList.innerHTML=''; master.forEach(m=>{
+      const div=document.createElement('div'); div.className='row';
+      div.innerHTML = `<div><div style="font-weight:600">${m.name}</div><div class="small">${m.category} · 기본 ${m.shelf}일</div></div><div style="display:flex;gap:6px"><button class='btn-add'>추가</button><div class='pill small'>${m.category}</div></div>`;
+      div.querySelector('.btn-add').addEventListener('click',()=>{ addBatchFromMaster(m.id,1,'냉장'); });
+      masterList.appendChild(div);
+    }); }
+
+    function addBatchFromMaster(ingId,qty,loc){ const id='b-'+Math.random().toString(36).slice(2,9); inventory.unshift({id,ingId,count:qty,added:new Date().toISOString(),loc}); saveJSON(LS_INV,inventory); renderInventory(); updateStats(); renderSimpleRecipes(); maybePushToCloud(); }
+
+    function renderSelect(){ selectIng.innerHTML=''; master.forEach(m=>{ const opt=document.createElement('option'); opt.value=m.id; opt.textContent=m.name; selectIng.appendChild(opt); }); }
+
+    function updateStats(){ totalCount.textContent = inventory.reduce((s,b)=>s+b.count,0);
+      const now=new Date().toISOString();
+      const soon = inventory.filter(b=>{ const m=master.find(x=>x.id===b.ingId)||{shelf:7}; const exp=addDaysISO(b.added,m.shelf); const d=daysBetweenISO(now,exp); return d<=3 && d>=0; }).length;
+      const expired = inventory.filter(b=> new Date(addDaysISO(b.added,(master.find(x=>x.id===b.ingId)||{shelf:7}).shelf)) < new Date()).length;
+      soonCount.textContent=soon; expiredCount.textContent=expired;
+    }
+
+    // persistence
+    function loadJSON(k){ try{ const s=localStorage.getItem(k); return s?JSON.parse(s):null }catch(e){return null} }
+    function saveJSON(k,v){ localStorage.setItem(k,JSON.stringify(v)); }
+
+    function addDaysISO(iso,days){ const d=new Date(iso); d.setDate(d.getDate()+ (days||0)); return d.toISOString(); }
+    function daysBetweenISO(aISO,bISO){ const a=new Date(aISO); const b=new Date(bISO); return Math.ceil((b-a)/(1000*60*60*24)); }
+
+    // ---------- Optional Firebase sync (simple, no auth) ----------
+    // If a file firebase-config.js exists and sets window.FIREBASE_CONFIG, we initialize
+    // and synchronize master/inventory under collection: fridge/<USER>/ (user from window.FR_USER_ID or 'public-user').
+    function maybeInitFirebase(){
+      if(!window.FIREBASE_CONFIG) return;
+      // load SDKs (using compat CDN for simplicity)
+      const s1 = document.createElement('script'); s1.src='https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js'; s1.onload = ()=>{
+        const s2 = document.createElement('script'); s2.src='https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js'; s2.onload = ()=>{ initFirestore(); };
+        document.head.appendChild(s2);
+      };
+      document.head.appendChild(s1);
+    }
+
+    function initFirestore(){
+      try{
+        firebase.initializeApp(window.FIREBASE_CONFIG);
+        firestore = firebase.firestore();
+        firebaseEnabled = true;
+        userId = window.FR_USER_ID || 'public-user';
+        syncStatus.textContent = '동기화: Firebase 연결됨 (사용자: '+userId+')';
+        // listen for remote changes
+        const masterRef = firestore.collection('fridge').doc(userId).collection('master');
+        const invRef = firestore.collection('fridge').doc(userId).collection('inventory');
+        // pull full collections once and then listen
+        masterRef.onSnapshot(snapshot=>{
+          const arr = []; snapshot.forEach(doc=>arr.push(doc.data())); if(arr.length) { master = arr; saveJSON(LS_MASTER,master); renderMaster(); renderSelect(); }
+        });
+        invRef.onSnapshot(snapshot=>{
+          const arr=[]; snapshot.forEach(doc=>arr.push(doc.data())); if(arr.length){ inventory = arr; saveJSON(LS_INV,inventory); renderInventory(); updateStats(); renderSimpleRecipes(); }
+        });
+        // push local state on start if remote empty - small conflict handling (last write wins)
+        setTimeout(()=>{ pushAllToCloud(); },2000);
+      }catch(e){
+        console.error('firebase init error',e);
+      }
+    }
+
+    function pushAllToCloud(){
+      if(!firebaseEnabled || !firestore) return;
+      const masterRef = firestore.collection('fridge').doc(userId).collection('master');
+      const invRef = firestore.collection('fridge').doc(userId).collection('inventory');
+      // overwrite: delete existing then set (simple strategy)
+      masterRef.get().then(snap=>{ const promises = []; snap.forEach(d=>promises.push(d.ref.delete())); Promise.all(promises).then(()=>{ master.forEach(m=> masterRef.doc(m.id).set(m)); }); });
+      invRef.get().then(snap=>{ const promises = []; snap.forEach(d=>promises.push(d.ref.delete())); Promise.all(promises).then(()=>{ inventory.forEach(b=> invRef.doc(b.id).set(b)); }); });
+    }
+
+    function maybePushToCloud(){
+      // small debounce
+      if(!firebaseEnabled) return;
+      if(window._pushTimeout) clearTimeout(window._pushTimeout);
+      window._pushTimeout = setTimeout(()=>{ pushAllToCloud(); },1200);
+    }
+
+    // try to init firebase (if firebase-config.js sets FIREBASE_CONFIG)
+    maybeInitFirebase();
+
+    // listen to storage events from other tabs/devices (only for same browser)
+    window.addEventListener('storage',()=>{ master=loadJSON(LS_MASTER)||master; inventory=loadJSON(LS_INV)||inventory; renderMaster(); renderSelect(); renderInventory(); updateStats(); });
+
+    // small utilities exposed for debugging
+    window.__FRIDGE = { master, inventory, pushAllToCloud, maybeInitFirebase };
+
+  })();
+  </script>
+
+  <!-- try to register service worker -->
+  <script>
+    if('serviceWorker' in navigator){
+      navigator.serviceWorker.register('service-worker.js').then(()=>console.log('SW registered')).catch(()=>console.log('SW failed'));
+    }
+  </script>
+
+</body>
+</html>
